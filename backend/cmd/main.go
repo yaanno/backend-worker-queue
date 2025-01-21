@@ -1,35 +1,58 @@
 package main
 
 import (
-	"log"
+	"encoding/json"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nsqio/go-nsq"
+	"github.com/rs/zerolog"
+	logger "github.com/yaanno/backend"
 )
 
 // Handler for consuming messages from the worker
-type WorkerResponseHandler struct{}
+type WorkerResponseHandler struct {
+	logger   *zerolog.Logger
+	consumer *nsq.Consumer
+}
+
+type Message struct {
+	Body string `json:"body"`
+	ID   int    `json:"id"`
+}
+
+type WorkerMessage struct {
+	Body string `json:"body"`
+	ID   int    `json:"id"`
+}
 
 func (h *WorkerResponseHandler) HandleMessage(m *nsq.Message) error {
-	log.Printf("Received message from worker: %s", string(m.Body))
+	var msg WorkerMessage
+	if err := json.Unmarshal(m.Body, &msg); err != nil {
+		h.logger.Error().Err(err).Msg("Failed to unmarshal message")
+		return err
+	}
+	h.logger.Info().Interface("Received message from worker:", &msg).Send()
 	return nil
 }
 
 func main() {
 	// Signal handling for graceful stopping
+	logger := logger.InitLogger("backend", "development")
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	time.Sleep(10 * time.Second)
-	log.Println("Starting Backend...")
+	logger.Info().Msg("Starting Backend...")
 
 	// Producer code to send messages to the worker in a loop
 	config := nsq.NewConfig()
 	producer, err := nsq.NewProducer("nsqd:4150", config)
 	if err != nil {
-		log.Fatal(err)
+		logger.Error().Err(err).Msg("Failed to create producer")
+		<-stop
+		return
 	}
 	defer producer.Stop()
 
@@ -40,14 +63,21 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				err = producer.Publish("backend_to_worker", []byte("Message from Backend"))
+				id := uuid.New()
+				msg, err := json.Marshal(&Message{Body: "Hello from backend", ID: int(id.ID())})
+				logger.Info().Msg("Sending message to worker")
 				if err != nil {
-					log.Printf("Failed to publish message: %v", err)
+					logger.Error().Err(err).Msg("Failed to marshal message")
+					continue
+				}
+				err = producer.Publish("backend_to_worker", msg)
+				if err != nil {
+					logger.Error().Err(err).Msg("Failed to publish message")
 				} else {
-					log.Println("Message sent to worker")
+					logger.Info().Msg("Message sent to worker")
 				}
 			case <-stop:
-				log.Println("Stopping message loop")
+				logger.Info().Msg("Stopping message loop")
 				return
 			}
 		}
@@ -56,18 +86,25 @@ func main() {
 	// Consumer code to receive messages from the worker
 	consumer, err := nsq.NewConsumer("worker_to_backend", "channel1", config)
 	if err != nil {
-		log.Fatal(err)
+		logger.Error().Err(err).Msg("Failed to create consumer")
+		// log.Fatal(err)
+		<-stop
+		return
 	}
 
-	consumer.AddHandler(&WorkerResponseHandler{})
+	// consumer.AddHandler(&WorkerResponseHandler{})
+	handler := &WorkerResponseHandler{consumer: consumer, logger: &logger}
+	consumer.AddHandler(handler)
 
 	err = consumer.ConnectToNSQD("nsqd:4150")
 	if err != nil {
-		log.Fatal(err)
+		logger.Error().Err(err).Msg("Failed to connect to nsqd")
+		<-stop
+		return
 	}
 
 	// Wait for stop signal
 	<-stop
-	log.Println("Shutting down gracefully...")
+	logger.Info().Msg("Shutting down gracefully...")
 	consumer.Stop()
 }
