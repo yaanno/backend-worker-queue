@@ -22,10 +22,12 @@ func main() {
 	// Signal handling for graceful stopping
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	time.Sleep(10 * time.Second)
+	log.Println("Starting Backend...")
 
 	// Producer code to send messages to the worker in a loop
 	config := nsq.NewConfig()
-	producer, err := nsq.NewProducer("127.0.0.1:4150", config)
+	producer, err := nsq.NewProducer("nsqd:4150", config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func main() {
 
 	consumer.AddHandler(&WorkerResponseHandler{})
 
-	err = consumer.ConnectToNSQD("127.0.0.1:4150")
+	err = consumer.ConnectToNSQD("nsqd:4150")
 	if err != nil {
 		log.Fatal(err)
 	}

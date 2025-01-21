@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nsqio/go-nsq"
 )
@@ -32,10 +33,12 @@ func main() {
 	// Signal handling for graceful stopping
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	time.Sleep(10 * time.Second)
+	log.Println("Starting Worker...")
 
 	// Create a single producer instance
 	config := nsq.NewConfig()
-	producer, err := nsq.NewProducer("127.0.0.1:4150", config)
+	producer, err := nsq.NewProducer("nsqd:4150", config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,7 +54,7 @@ func main() {
 	handler := &BackendMessageHandler{producer: producer}
 	consumer.AddHandler(handler)
 
-	err = consumer.ConnectToNSQD("127.0.0.1:4150")
+	err = consumer.ConnectToNSQD("nsqd:4150")
 	if err != nil {
 		log.Fatal(err)
 	}

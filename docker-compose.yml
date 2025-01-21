@@ -1,3 +1,6 @@
+networks:
+  experiment:
+
 services:
   nsqlookupd:
     image: nsqio/nsq
@@ -5,7 +8,13 @@ services:
     ports:
       - "4160:4160"
       - "4161:4161"
+    expose:
+      - 4160
+      - 4161
     command: /nsqlookupd
+    networks:
+      - experiment
+
   nsqd:
     image: nsqio/nsq
     hostname: nsqd
@@ -13,6 +22,11 @@ services:
       - "4150:4150"
       - "4151:4151"
     command: /nsqd -broadcast-address=nsqd --lookupd-tcp-address=nsqlookupd:4160
+    networks:
+      - experiment
+    expose:
+      - 4150
+      - 4151
 
   nsqadmin:
     image: nsqio/nsq
@@ -21,3 +35,31 @@ services:
       - "4170:4170"
       - "4171:4171"
     command: /nsqadmin --lookupd-http-address=nsqlookupd:4161
+    networks:
+      - experiment
+    expose:
+      - 4171
+
+  worker:
+    build:
+      context: worker
+      dockerfile: Dockerfile
+    hostname: worker
+    ports:
+      - "8081:8081"
+    networks:
+      - experiment
+    depends_on:
+      - nsqd
+
+  backend:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    hostname: backend
+    ports:
+      - "8080:8080"
+    networks:
+      - experiment
+    depends_on:
+      - nsqd
