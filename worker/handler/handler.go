@@ -11,7 +11,7 @@ type MessageResponseHandler struct {
 	Publish func(msg *model.Response) error
 }
 
-func NewBackendResponseHandler(logger *zerolog.Logger) *MessageResponseHandler {
+func NewMessageResponseHandler(logger *zerolog.Logger) *MessageResponseHandler {
 	return &MessageResponseHandler{
 		logger: logger,
 	}

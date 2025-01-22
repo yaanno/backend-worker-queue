@@ -33,7 +33,7 @@ func main() {
 	messaging := message.NewMessaging(config, &logger)
 
 	// Initialize the backend response handler with the messaging instance
-	handler := handler.NewBackendResponseHandler(&logger)
+	handler := handler.NewMessageResponseHandler(&logger)
 
 	err := messaging.Initialize(handler)
 	if err != nil {
