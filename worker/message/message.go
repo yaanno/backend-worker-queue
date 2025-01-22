@@ -19,9 +19,9 @@ const (
 )
 
 type Messaging interface {
-	PublishMessage(msg *model.BackendMessage) error
-	ConsumeMessage(msg *model.WorkerMessage) error
-	Initialize(handler *handler.BackendResponseHandler) error
+	PublishMessage(msg *model.Response) error
+	ConsumeMessage(msg *model.Message) error
+	Initialize(handler *handler.MessageResponseHandler) error
 	ListenForMessages(ctx context.Context) error
 	ShutDown() error
 }
@@ -41,9 +41,7 @@ func NewMessaging(config *nsq.Config, logger *zerolog.Logger) Messaging {
 	}
 }
 
-// The rest of the Messaging implementation stays the same
-
-func (m *MessagingImpl) Initialize(handler *handler.BackendResponseHandler) error {
+func (m *MessagingImpl) Initialize(handler *handler.MessageResponseHandler) error {
 	var err error
 	if m.logger == nil {
 		m.logger = &zerolog.Logger{}
@@ -68,7 +66,7 @@ func (m *MessagingImpl) Initialize(handler *handler.BackendResponseHandler) erro
 	return nil
 }
 
-func (m *MessagingImpl) PublishMessage(msg *model.BackendMessage) error {
+func (m *MessagingImpl) PublishMessage(msg *model.Response) error {
 	message, err := json.Marshal(msg)
 	m.logger.Info().Msg("Sending message to backend")
 	if err != nil {
@@ -83,7 +81,7 @@ func (m *MessagingImpl) PublishMessage(msg *model.BackendMessage) error {
 	return nil
 }
 
-func (m *MessagingImpl) ConsumeMessage(msg *model.WorkerMessage) error {
+func (m *MessagingImpl) ConsumeMessage(msg *model.Message) error {
 	m.logger.Info().Msg("Consuming message from backend")
 	return nil
 }

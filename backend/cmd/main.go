@@ -29,7 +29,7 @@ func main() {
 
 	config := nsq.NewConfig()
 
-	handler := handler.NewWorkerResponseHandler(&logger)
+	handler := handler.NewMessageResponseHandler(&logger)
 
 	messaging := message.NewMessaging(config, &logger)
 
@@ -43,7 +43,7 @@ func main() {
 			select {
 			case <-ticker.C:
 				id := uuid.New()
-				msg := model.BackendMessage{Body: "Hello from backend", ID: int(id.ID())}
+				msg := model.Response{Body: "Hello from backend", ID: int(id.ID())}
 				err := messaging.PublishMessage(&msg)
 				if err != nil {
 					logger.Error().Err(err).Msg("Failed to publish message")

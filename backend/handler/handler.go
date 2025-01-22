@@ -8,18 +8,18 @@ import (
 	"github.com/yaanno/backend/model"
 )
 
-type WorkerResponseHandler struct {
+type MessageResponseHandler struct {
 	logger *zerolog.Logger
 }
 
-func NewWorkerResponseHandler(logger *zerolog.Logger) *WorkerResponseHandler {
-	return &WorkerResponseHandler{
+func NewMessageResponseHandler(logger *zerolog.Logger) *MessageResponseHandler {
+	return &MessageResponseHandler{
 		logger: logger,
 	}
 }
 
-func (h *WorkerResponseHandler) HandleMessage(m *nsq.Message) error {
-	var msg model.WorkerMessage
+func (h *MessageResponseHandler) HandleMessage(m *nsq.Message) error {
+	var msg model.Message
 	if err := json.Unmarshal(m.Body, &msg); err != nil {
 		h.logger.Error().Err(err).Msg("Failed to unmarshal message")
 		return err
