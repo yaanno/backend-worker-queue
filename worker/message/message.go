@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/nsqio/go-nsq"
 	"github.com/rs/zerolog"
@@ -95,4 +96,20 @@ func (m *Messaging) ListenForMessages(ctx context.Context) error {
 		m.logger.Info().Msg("Stopped listening for messages.")
 	}()
 	return nil
+}
+
+func (m *Messaging) RequeueMessage(message *nsq.Message) {
+	m.logger.Info().Msg("Requeue message")
+	if message.Attempts >= 5 {
+		m.logger.Error().Msg("Max attempts reached, dropping message")
+		message.Finish()
+	} else {
+		backoffDuration := time.Duration(message.Attempts) * time.Second
+		message.Requeue(backoffDuration)
+		m.logger.Info().Msg("Message requeued")
+	}
+}
+
+func (m *Messaging) Monitor() []*nsq.Consumer {
+	return []*nsq.Consumer{m.consumer}
 }

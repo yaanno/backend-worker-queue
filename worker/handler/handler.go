@@ -2,15 +2,13 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/nsqio/go-nsq"
 	"github.com/rs/zerolog"
-	"github.com/yaanno/worker/model"
 )
 
 type WorkerServiceInterface interface {
-	ProcessMessage(ctx context.Context, message *model.Message) error
+	ProcessMessage(ctx context.Context, message *nsq.Message) error
 }
 
 type MessageResponseHandler struct {
@@ -29,16 +27,16 @@ func NewMessageResponseHandler(logger *zerolog.Logger, service WorkerServiceInte
 func (h *MessageResponseHandler) HandleMessage(msg *nsq.Message) error {
 	h.logger.Info().Msg("Handling message from backend")
 
-	// Deserialize the message into the custom model
-	var message model.Message
-	err := json.Unmarshal(msg.Body, &message)
-	if err != nil {
-		h.logger.Error().Err(err).Msg("Failed to unmarshal message")
-		return err
-	}
+	// // Deserialize the message into the custom model
+	// var message model.Message
+	// err := json.Unmarshal(msg.Body, &message)
+	// if err != nil {
+	// 	h.logger.Error().Err(err).Msg("Failed to unmarshal message")
+	// 	return err
+	// }
 
 	// Delegate the processing to the worker service
-	err = h.service.ProcessMessage(context.Background(), &message)
+	err := h.service.ProcessMessage(context.Background(), msg)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("Failed to process message")
 		return err

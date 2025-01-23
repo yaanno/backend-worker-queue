@@ -58,7 +58,7 @@ services:
       dockerfile: Dockerfile
     hostname: backend
     ports:
-      - "8080:8080"
+      - "8082:8082"
     networks:
       - experiment
     depends_on:

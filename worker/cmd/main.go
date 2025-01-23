@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"net/http"
 
@@ -33,6 +34,9 @@ func main() {
 	// Initialize NSQ config
 	config := nsq.NewConfig()
 
+	// Retry limit
+	retryLimit := 5
+
 	// Initialize messaging
 	messaging := message.NewMessaging(config, &logger)
 
@@ -43,7 +47,7 @@ func main() {
 	httpClient := &http.Client{}
 
 	// Initialize the worker service with the messaging instance and worker pool
-	workerService := service.NewWorkerService(workerPool, messaging, &logger, httpClient)
+	workerService := service.NewWorkerService(workerPool, messaging, &logger, httpClient, retryLimit)
 	workerService.Start() // Start the worker pool
 
 	// Initialize the backend response handler with the worker service instance
@@ -57,6 +61,36 @@ func main() {
 
 	// Start listening for messages in a goroutine
 	go messaging.ListenForMessages(ctx)
+
+	// Monitoring
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			consumers := messaging.Monitor()
+			logger.Info().Msg("Consumer Status:")
+			for _, consumer := range consumers {
+				logger.Info().Msgf(
+					"Received: %d, Processed: %d, Requeued: %d",
+					consumer.Stats().MessagesReceived,
+					consumer.Stats().MessagesFinished,
+					consumer.Stats().MessagesRequeued,
+				)
+			}
+			tasks := workerService.GetTaskCount()
+			poolSize := workerService.GetPoolSize()
+			logger.Info().Msgf("Task Count: %d, Pool Size: %d", tasks, poolSize)
+			workers := workerService.Monitor()
+			logger.Info().Msg("Worker Status:")
+			for _, worker := range workers {
+				logger.Info().Msgf(
+					"Worker ID: %d, State: %s, Elapsed Time: %s",
+					worker.ID,
+					worker.State,
+					worker.ElapsedTime,
+				)
+			}
+		}
+	}()
 
 	// Wait for stop signal
 	<-stop
