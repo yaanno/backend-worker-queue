@@ -1,30 +1,48 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+
 	"github.com/nsqio/go-nsq"
 	"github.com/rs/zerolog"
 	"github.com/yaanno/worker/model"
 )
 
+type WorkerServiceInterface interface {
+	ProcessMessage(ctx context.Context, message *model.Message) error
+}
+
 type MessageResponseHandler struct {
 	logger  *zerolog.Logger
-	Publish func(msg *model.Response) error
+	service WorkerServiceInterface
 }
 
-func NewMessageResponseHandler(logger *zerolog.Logger) *MessageResponseHandler {
+func NewMessageResponseHandler(logger *zerolog.Logger, service WorkerServiceInterface) *MessageResponseHandler {
 	return &MessageResponseHandler{
-		logger: logger,
+		logger:  logger,
+		service: service,
 	}
 }
 
-// Example handler method that uses the messaging instance
+// HandleMessage method that uses the worker service to process the message
 func (h *MessageResponseHandler) HandleMessage(msg *nsq.Message) error {
 	h.logger.Info().Msg("Handling message from backend")
-	// Respond back to the backend
-	responseMsg := &model.Response{
-		// Fill in the response message
-		Body: "Response from worker",
-		ID:   123456,
+
+	// Deserialize the message into the custom model
+	var message model.Message
+	err := json.Unmarshal(msg.Body, &message)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to unmarshal message")
+		return err
 	}
-	return h.Publish(responseMsg)
+
+	// Delegate the processing to the worker service
+	err = h.service.ProcessMessage(context.Background(), &message)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to process message")
+		return err
+	}
+
+	return nil
 }

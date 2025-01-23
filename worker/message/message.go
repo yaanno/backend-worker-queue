@@ -7,7 +7,6 @@ import (
 
 	"github.com/nsqio/go-nsq"
 	"github.com/rs/zerolog"
-	handler "github.com/yaanno/worker/handler"
 	"github.com/yaanno/worker/model"
 )
 
@@ -18,15 +17,7 @@ const (
 	channel         = "channel1"
 )
 
-type Messaging interface {
-	PublishMessage(msg *model.Response) error
-	ConsumeMessage(msg *model.Message) error
-	Initialize(handler *handler.MessageResponseHandler) error
-	ListenForMessages(ctx context.Context) error
-	ShutDown() error
-}
-
-type MessagingImpl struct {
+type Messaging struct {
 	producer *nsq.Producer
 	consumer *nsq.Consumer
 	config   *nsq.Config
@@ -34,14 +25,14 @@ type MessagingImpl struct {
 	wg       sync.WaitGroup
 }
 
-func NewMessaging(config *nsq.Config, logger *zerolog.Logger) *MessagingImpl {
-	return &MessagingImpl{
+func NewMessaging(config *nsq.Config, logger *zerolog.Logger) *Messaging {
+	return &Messaging{
 		config: config,
 		logger: logger,
 	}
 }
 
-func (m *MessagingImpl) Initialize(handler *handler.MessageResponseHandler) error {
+func (m *Messaging) Initialize(handler nsq.Handler) error {
 	var err error
 	if m.logger == nil {
 		m.logger = &zerolog.Logger{}
@@ -54,7 +45,6 @@ func (m *MessagingImpl) Initialize(handler *handler.MessageResponseHandler) erro
 	if err != nil {
 		return err
 	}
-	handler.Publish = m.PublishMessage
 	m.consumer.AddHandler(handler)
 
 	err = m.consumer.ConnectToNSQD(nsqd_address)
@@ -66,7 +56,7 @@ func (m *MessagingImpl) Initialize(handler *handler.MessageResponseHandler) erro
 	return nil
 }
 
-func (m *MessagingImpl) PublishMessage(msg *model.Response) error {
+func (m *Messaging) PublishMessage(msg *model.Response) error {
 	message, err := json.Marshal(msg)
 	m.logger.Info().Msg("Sending message to backend")
 	if err != nil {
@@ -81,12 +71,12 @@ func (m *MessagingImpl) PublishMessage(msg *model.Response) error {
 	return nil
 }
 
-func (m *MessagingImpl) ConsumeMessage(msg *model.Message) error {
+func (m *Messaging) ConsumeMessage(msg *model.Message) error {
 	m.logger.Info().Msg("Consuming message from backend")
 	return nil
 }
 
-func (m *MessagingImpl) ShutDown() error {
+func (m *Messaging) ShutDown() error {
 	m.logger.Info().Msg("Shutting down gracefully...")
 	m.producer.Stop()
 	m.consumer.Stop()
@@ -94,7 +84,7 @@ func (m *MessagingImpl) ShutDown() error {
 	return nil
 }
 
-func (m *MessagingImpl) ListenForMessages(ctx context.Context) error {
+func (m *Messaging) ListenForMessages(ctx context.Context) error {
 	m.logger.Info().Msg("Listening for messages...")
 	m.wg.Add(1)
 	go func() {

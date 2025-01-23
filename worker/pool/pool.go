@@ -13,13 +13,6 @@ type WorkerPool struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	poolSize int
-	// numTasks int
-	// numCompletedTasks int
-	// numFailedTasks int
-	// numCancelledTasks int
-	// numPendingTasks int
-	// numRunningTasks int
-	// numWaitingTasks int
 }
 
 func NewWorkerPool(poolSize int) *WorkerPool {

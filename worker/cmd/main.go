@@ -6,10 +6,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"net/http"
+
 	"github.com/nsqio/go-nsq"
 	handler "github.com/yaanno/worker/handler"
 	logger "github.com/yaanno/worker/logger"
 	"github.com/yaanno/worker/message"
+	"github.com/yaanno/worker/pool"
+	"github.com/yaanno/worker/service"
 )
 
 func main() {
@@ -32,10 +36,20 @@ func main() {
 	// Initialize messaging
 	messaging := message.NewMessaging(config, &logger)
 
-	// Initialize the backend response handler with the messaging instance
-	handler := handler.NewMessageResponseHandler(&logger)
+	// Initialize the worker pool
+	workerPool := pool.NewWorkerPool(1)
 
-	err := messaging.Initialize(handler)
+	// Initialize the HTTP client
+	httpClient := &http.Client{}
+
+	// Initialize the worker service with the messaging instance and worker pool
+	workerService := service.NewWorkerService(workerPool, messaging, &logger, httpClient)
+	workerService.Start() // Start the worker pool
+
+	// Initialize the backend response handler with the worker service instance
+	responseHandler := handler.NewMessageResponseHandler(&logger, workerService)
+
+	err := messaging.Initialize(responseHandler)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to initialize messaging")
 		return
@@ -47,6 +61,7 @@ func main() {
 	// Wait for stop signal
 	<-stop
 
-	// Shut down messaging gracefully
+	// Shut down messaging and worker service
 	messaging.ShutDown()
+	workerService.Stop()
 }
