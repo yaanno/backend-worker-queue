@@ -7,8 +7,8 @@ import (
 	"syscall"
 
 	"github.com/nsqio/go-nsq"
-	logger "github.com/yaanno/worker"
 	handler "github.com/yaanno/worker/handler"
+	logger "github.com/yaanno/worker/logger"
 	"github.com/yaanno/worker/message"
 )
 

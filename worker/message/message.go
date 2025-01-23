@@ -34,7 +34,7 @@ type MessagingImpl struct {
 	wg       sync.WaitGroup
 }
 
-func NewMessaging(config *nsq.Config, logger *zerolog.Logger) Messaging {
+func NewMessaging(config *nsq.Config, logger *zerolog.Logger) *MessagingImpl {
 	return &MessagingImpl{
 		config: config,
 		logger: logger,
