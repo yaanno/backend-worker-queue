@@ -51,14 +51,14 @@ func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Messag
 	// ws.apiUrl = "https://potterapi-fedeperin.vercel.app/es/characters?search=Weasley1"
 	ws.logger.Info().Msg("Processing message")
 	// Submit the task to the worker pool
-	ws.workerPool.Submit(func(ctx context.Context) {
+	ws.workerPool.Submit(func(ctx context.Context) error {
 		ws.logger.Info().Msgf("Worker started processing message ID: %s", message.ID)
 
 		select {
 		case <-ctx.Done():
 			ws.logger.Error().Msg("Task canceled due to timeout")
 			ws.requeueMessage(message)
-			return
+			return ctx.Err()
 		default:
 		}
 
@@ -67,7 +67,7 @@ func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Messag
 		if err != nil {
 			ws.logger.Error().Err(err).Msg("Failed to unmarshal message")
 			ws.requeueMessage(message)
-			return
+			return err
 		}
 
 		startTime := time.Now()
@@ -77,7 +77,7 @@ func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Messag
 		if err != nil {
 			ws.logger.Error().Err(err).Msg("Error sending request")
 			ws.requeueMessage(message)
-			return
+			return err
 		}
 
 		// Create a response message
@@ -89,11 +89,13 @@ func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Messag
 		if err := ws.messaging.PublishMessage(responseMsg); err != nil {
 			ws.logger.Error().Err(err).Msg("Error publishing message")
 			ws.requeueMessage(message)
-			return
+			return err
 		}
 		message.Finish()
 		ws.logger.Info().Msgf("Worker finished processing message ID: %s", message.ID)
+		return nil
 	})
+
 	return nil
 }
 

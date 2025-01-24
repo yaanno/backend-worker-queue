@@ -41,7 +41,7 @@ func main() {
 	messaging := message.NewMessaging(config, &logger)
 
 	// Initialize the worker pool
-	workerPool := pool.NewWorkerPool(1)
+	workerPool := pool.NewWorkerPool(1, 5)
 
 	// Initialize the HTTP client
 	httpClient := &http.Client{}

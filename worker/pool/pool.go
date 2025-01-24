@@ -2,6 +2,8 @@ package pool
 
 import (
 	"context"
+	"errors"
+	"log"
 	"sync"
 	"time"
 )
@@ -12,23 +14,26 @@ type Worker struct {
 	Task        Task
 	StartTime   time.Time
 	ElapsedTime time.Duration
+	quit        chan struct{} // Channel for signaling worker to quit
 }
 
-type Task func(context.Context)
+type Task func(context.Context) error
 
 type WorkerPool struct {
-	tasks       chan Task
-	wg          sync.WaitGroup
-	ctx         context.Context
-	cancel      context.CancelFunc
-	poolSize    int
-	workers     []*Worker
-	lock        sync.Mutex
-	activeTasks int
+	tasks            chan Task
+	wg               sync.WaitGroup
+	ctx              context.Context
+	cancel           context.CancelFunc
+	poolSize         int
+	workers          []*Worker
+	rwLock           sync.RWMutex // Read-write lock
+	activeTasks      int
+	activeTasksMutex sync.Mutex // Protect activeTasks
+	maxTasks         int        // Maximum number of concurrent tasks
 }
 
-// NewWorkerPool creates a new WorkerPool with the specified size.
-func NewWorkerPool(poolSize int) *WorkerPool {
+// NewWorkerPool creates a new WorkerPool with the specified size and maximum concurrent tasks.
+func NewWorkerPool(poolSize int, maxTasks int) *WorkerPool {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &WorkerPool{
 		tasks:    make(chan Task),
@@ -36,6 +41,7 @@ func NewWorkerPool(poolSize int) *WorkerPool {
 		cancel:   cancel,
 		poolSize: poolSize,
 		workers:  make([]*Worker, poolSize),
+		maxTasks: maxTasks,
 	}
 }
 
@@ -45,6 +51,7 @@ func (p *WorkerPool) Start() {
 		worker := &Worker{
 			ID:    i,
 			State: "idle",
+			quit:  make(chan struct{}),
 		}
 		p.workers[i] = worker
 		p.wg.Add(1)
@@ -58,23 +65,37 @@ func (p *WorkerPool) worker(worker *Worker) {
 	for {
 		select {
 		case task := <-p.tasks:
-			p.lock.Lock()
+			p.rwLock.Lock() // Acquire write lock for worker state modifications
 			worker.State = "running"
 			worker.Task = task
 			worker.StartTime = time.Now()
-			p.activeTasks++
-			p.lock.Unlock()
+			p.rwLock.Unlock()
 
-			ctx, cancel := context.WithTimeout(p.ctx, 2*time.Second) // Set a 2-second timeout
+			p.activeTasksMutex.Lock()
+			p.activeTasks++
+			p.activeTasksMutex.Unlock()
+
+			// Execute the task with a timeout
+			ctx, cancel := context.WithTimeout(p.ctx, 5*time.Second) // Adjust timeout as needed
 			defer cancel()
 
-			task(ctx)
+			err := worker.Task(ctx)
+			if err != nil {
+				// Handle task errors (e.g., log, retry)
+				// ...
+				log.Default().Println("Task error:", err)
+			}
 
-			p.lock.Lock()
+			p.rwLock.Lock() // Acquire write lock for worker state modifications
 			worker.State = "idle"
 			worker.ElapsedTime = time.Since(worker.StartTime)
+			p.rwLock.Unlock()
+
+			p.activeTasksMutex.Lock()
 			p.activeTasks--
-			p.lock.Unlock()
+			p.activeTasksMutex.Unlock()
+		case <-worker.quit: // Check for quit signal
+			return
 		case <-p.ctx.Done():
 			return
 		}
@@ -82,35 +103,49 @@ func (p *WorkerPool) worker(worker *Worker) {
 }
 
 // Submit submits a task to the worker pool.
-func (p *WorkerPool) Submit(task Task) {
+func (p *WorkerPool) Submit(task Task) error {
+	// Check if the maximum number of concurrent tasks is reached
+	p.activeTasksMutex.Lock()
+	defer p.activeTasksMutex.Unlock()
+	if p.activeTasks >= p.maxTasks {
+		return ErrMaxTasksReached // Define a custom error
+	}
+
 	p.tasks <- task
+	return nil
 }
 
 // Shutdown gracefully shuts down the worker pool, waiting for all tasks to complete.
 func (p *WorkerPool) Shutdown() {
 	p.cancel()
 	close(p.tasks)
+
+	// Signal workers to quit
+	for _, worker := range p.workers {
+		close(worker.quit)
+	}
+
 	p.wg.Wait()
 }
 
 // GetWorkers returns the list of workers.
 func (p *WorkerPool) GetWorkers() []*Worker {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	p.rwLock.RLock() // Acquire read lock
+	defer p.rwLock.RUnlock()
 	return p.workers
 }
 
 // GetWorker returns a worker by ID.
 func (p *WorkerPool) GetWorker(id int) *Worker {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	p.rwLock.RLock() // Acquire read lock
+	defer p.rwLock.RUnlock()
 	return p.workers[id]
 }
 
 // GetTaskCount returns the number of active tasks being processed.
 func (p *WorkerPool) GetTaskCount() int {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	p.activeTasksMutex.Lock()
+	defer p.activeTasksMutex.Unlock()
 	return p.activeTasks
 }
 
@@ -121,7 +156,10 @@ func (p *WorkerPool) GetPoolSize() int {
 
 // Monitor provides information about the current state of the workers.
 func (p *WorkerPool) Monitor() []*Worker {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	p.rwLock.Lock()
+	defer p.rwLock.Unlock()
 	return p.workers
 }
+
+// Error for maximum tasks reached
+var ErrMaxTasksReached = errors.New("maximum number of concurrent tasks reached")
