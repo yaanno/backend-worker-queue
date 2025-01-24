@@ -3,36 +3,73 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/nsqio/go-nsq"
 	"github.com/panjf2000/ants/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
+	"github.com/sony/gobreaker"
 	"github.com/yaanno/worker/message"
+	"github.com/yaanno/worker/metrics"
 	"github.com/yaanno/worker/model"
+	"golang.org/x/time/rate"
 )
 
+type APIConfig struct {
+	RateLimit int
+	BaseURL   string
+}
+
 type WorkerService struct {
-	pool       *ants.Pool
-	logger     *zerolog.Logger
-	httpClient *http.Client
-	apiUrl     string
-	retryLimit int
+	pool        *ants.Pool
+	logger      *zerolog.Logger
+	httpClient  *http.Client
+	apiConfig   APIConfig
+	retryLimit  int
+	rateLimiter *rate.Limiter
+	breaker     *gobreaker.CircuitBreaker
 }
 
 func NewWorkerService(
 	pool *ants.Pool,
 	logger *zerolog.Logger,
 	httpClient *http.Client,
+	config APIConfig,
 	retryLimit int,
 ) *WorkerService {
+	// Create rate limiter based on config
+	limiter := rate.NewLimiter(rate.Limit(config.RateLimit), config.RateLimit)
+
+	// Configure circuit breaker
+	breakerSettings := gobreaker.Settings{
+		Name:        "HTTP",
+		MaxRequests: uint32(config.RateLimit),
+		Interval:    time.Second * 30,
+		Timeout:     time.Second * 60,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
+			return counts.Requests >= 5 && failureRatio >= 0.7
+		},
+		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			logger.Info().
+				Str("from", from.String()).
+				Str("to", to.String()).
+				Msg("Circuit breaker state changed")
+		},
+	}
+
 	ws := &WorkerService{
-		pool:       pool,
-		logger:     logger,
-		httpClient: httpClient,
-		apiUrl:     "https://origo.hu", // Replace with your default API URL
-		retryLimit: retryLimit,
+		pool:        pool,
+		logger:      logger,
+		httpClient:  httpClient,
+		apiConfig:   config,
+		retryLimit:  retryLimit,
+		rateLimiter: limiter,
+		breaker:     gobreaker.NewCircuitBreaker(breakerSettings),
 	}
 	return ws
 }
@@ -47,11 +84,30 @@ func (ws *WorkerService) Stop() {
 }
 
 func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Message, messaging *message.Messaging) error {
+	timer := prometheus.NewTimer(metrics.MessageProcessingDuration.WithLabelValues("processing"))
+	defer timer.ObserveDuration()
+
+	// Update worker pool utilization
+	metrics.WorkerPoolUtilization.Set(float64(ws.pool.Running()))
+
 	ws.logger.Info().Msg("Processing message")
 
 	if ws.pool == nil {
 		ws.logger.Error().Msg("Worker pool is not initialized")
-		return nil
+		return errors.New("worker pool not initialized")
+	}
+
+	// Validate message
+	if len(message.Body) == 0 {
+		ws.logger.Error().Msg("Empty message body")
+		return errors.New("empty message body")
+	}
+
+	// Parse and validate message
+	var msg model.Message
+	if err := json.Unmarshal(message.Body, &msg); err != nil {
+		ws.logger.Error().Err(err).Msg("Failed to parse message")
+		return err
 	}
 
 	// Submit the task to the ants pool
@@ -59,84 +115,102 @@ func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Messag
 		ws.logger.Info().Msgf("Worker started processing message ID: %s", message.ID)
 
 		retries := 0
+		backoff := time.Second
 
 		for {
-			// Create a context with timeout
-			timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second) // Adjust timeout as needed
-			defer cancel()
+			// Check rate limit
+			if err := ws.rateLimiter.Wait(ctx); err != nil {
+				ws.logger.Error().Err(err).Msg("Rate limit exceeded")
+				time.Sleep(backoff)
+				continue
+			}
 
-			select {
-			case <-timeoutCtx.Done():
-				ws.logger.Error().Msg("Task canceled due to timeout")
+			// Use circuit breaker for the request
+			resp, err := ws.breaker.Execute(func() (interface{}, error) {
+				return ws.sendRequest(ctx)
+			})
+
+			if err != nil {
+				if retries >= ws.retryLimit {
+					ws.logger.Error().Err(err).Msg("Max retries reached")
+					ws.requeueMessage(message)
+					return
+				}
+
+				ws.logger.Warn().Err(err).Int("retry", retries).Msg("Retrying request")
+				retries++
+				backoff *= 2 // Exponential backoff
+				time.Sleep(backoff)
+				continue
+			}
+
+			httpResp := resp.(*http.Response)
+			defer httpResp.Body.Close()
+
+			if httpResp.StatusCode >= 500 {
+				ws.logger.Error().Int("status", httpResp.StatusCode).Msg("Server error")
 				ws.requeueMessage(message)
 				return
-			default:
 			}
 
-			var msg model.Message
-			err := json.Unmarshal(message.Body, &msg)
-			if err != nil {
-				ws.logger.Error().Err(err).Msg("Failed to unmarshal message")
-				ws.requeueMessage(message)
-				continue // Continue the retry loop
-			}
-
-			startTime := time.Now()
-			response, err := ws.sendRequest(timeoutCtx) // Use timeoutCtx for the request
-			elapsedTime := time.Since(startTime)
-			ws.logger.Info().Msgf("Task completed in %s", elapsedTime)
-			if err != nil || response.StatusCode != http.StatusOK {
-				retries++
-				if retries >= ws.retryLimit {
-					ws.logger.Error().Err(err).Msgf("Error sending request (attempt %d)", retries)
-					ws.requeueMessage(message)
-					return // Exit the worker function
-				}
-				ws.logger.Warn().Err(err).Msgf("Retrying request (attempt %d)", retries)
-				time.Sleep(time.Duration(retries) * time.Second) // Exponential backoff
-				continue                                         // Continue the retry loop
-			}
-
-			// Create a response message
-			responseMsg := &model.Response{
-				ID:   msg.ID,
-				Body: msg.Body,
-			}
-			// Publish the response message
-			if err := messaging.PublishMessage(responseMsg); err != nil {
-				ws.logger.Error().Err(err).Msg("Error publishing message")
-				ws.requeueMessage(message)
-				continue // Continue the retry loop
-			}
-			message.Finish()
-			ws.logger.Info().Msgf("Worker finished processing message ID: %s", message.ID)
-			return // Exit the worker function successfully
+			ws.logger.Info().Msgf("Successfully processed message ID: %s", message.ID)
+			return
 		}
 	})
 
 	if err != nil {
-		ws.logger.Error().Err(err).Msg("Error submitting task to pool")
+		metrics.MessageProcessingTotal.WithLabelValues("error").Inc()
+		ws.logger.Error().Err(err).Msg("Failed to submit task to worker pool")
 		return err
 	}
 
+	metrics.MessageProcessingTotal.WithLabelValues("success").Inc()
 	return nil
 }
 
 func (ws *WorkerService) sendRequest(ctx context.Context) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ws.apiUrl, nil)
+	timer := prometheus.NewTimer(metrics.APIRequestDuration.WithLabelValues("request"))
+	defer timer.ObserveDuration()
+
+	// Update circuit breaker metrics
+	switch ws.breaker.State() {
+	case gobreaker.StateOpen:
+		metrics.CircuitBreakerState.Set(0)
+	case gobreaker.StateHalfOpen:
+		metrics.CircuitBreakerState.Set(1)
+	case gobreaker.StateClosed:
+		metrics.CircuitBreakerState.Set(2)
+	}
+
+	// Execute request through circuit breaker
+	resp, err := ws.breaker.Execute(func() (interface{}, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ws.apiConfig.BaseURL, nil)
+		if err != nil {
+			ws.logger.Error().Err(err).Msg("Error creating request")
+			return nil, err
+		}
+
+		resp, err := ws.httpClient.Do(req)
+		if err != nil {
+			ws.logger.Error().Err(err).Msg("Error sending request")
+			return nil, err
+		}
+
+		// Check if the response status code indicates an error
+		if resp.StatusCode >= 500 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("server error: %s", resp.Status)
+		}
+
+		ws.logger.Info().Msgf("Response status: %s, length: %d", resp.Status, resp.ContentLength)
+		return resp, nil
+	})
+
 	if err != nil {
-		ws.logger.Error().Err(err).Msg("Error creating request")
 		return nil, err
 	}
 
-	resp, err := ws.httpClient.Do(req)
-	if err != nil {
-		ws.logger.Error().Err(err).Msg("Error sending request")
-		return nil, err
-	}
-	defer resp.Body.Close()
-	ws.logger.Info().Msgf("Response status: %s, length: %d", resp.Status, resp.ContentLength)
-	return resp, nil
+	return resp.(*http.Response), nil
 }
 
 func (ws *WorkerService) requeueMessage(message *nsq.Message) {

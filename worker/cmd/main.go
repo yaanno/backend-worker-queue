@@ -11,6 +11,7 @@ import (
 
 	"github.com/nsqio/go-nsq"
 	"github.com/panjf2000/ants/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	handler "github.com/yaanno/worker/handler"
 	logger "github.com/yaanno/worker/logger"
@@ -19,9 +20,24 @@ import (
 )
 
 type Config struct {
-	NSQConfig      *nsq.Config
-	WorkerPoolSize int
-	RetryLimit     int
+	NSQConfig        *nsq.Config
+	WorkerPoolSize   int
+	GlobalRetryLimit int
+	APIConfig        APIConfig
+	Timeouts         TimeoutConfig
+}
+
+type APIConfig struct {
+	BaseURL       string
+	APIKey        string
+	RateLimit     int // Requests per second
+	MaxRetries    int
+	APIRetryLimit int
+}
+
+type TimeoutConfig struct {
+	RequestTimeout time.Duration
+	TaskTimeout    time.Duration
 }
 
 func main() {
@@ -44,6 +60,18 @@ func main() {
 	defer cancel()
 
 	logger.Info().Msg("Starting Worker...")
+
+	// Start metrics server
+	go func() {
+		metricsServer := &http.Server{
+			Addr:    ":2112", // Prometheus default metrics port
+			Handler: promhttp.Handler(),
+		}
+		logger.Info().Msg("Starting metrics server on :2112")
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error().Err(err).Msg("Metrics server error")
+		}
+	}()
 
 	messaging, err := createMessaging(config, &logger)
 	if err != nil {
@@ -99,9 +127,20 @@ func main() {
 func loadConfig() (*Config, error) {
 	// Implement your configuration loading logic here (e.g., read from file, environment variables)
 	return &Config{
-		NSQConfig:      nsq.NewConfig(), // Replace with actual configuration
-		WorkerPoolSize: 10,              // Adjust as needed
-		RetryLimit:     5,
+		NSQConfig:        nsq.NewConfig(), // Replace with actual configuration
+		WorkerPoolSize:   10,              // Adjust as needed
+		GlobalRetryLimit: 5,
+		APIConfig: APIConfig{
+			BaseURL: "https://potterapi-fedeperin.vercel.app/es/characters?search=Weasley",
+			// APIKey:        "your-api-key",
+			RateLimit:     10,
+			MaxRetries:    3,
+			APIRetryLimit: 5,
+		},
+		Timeouts: TimeoutConfig{
+			RequestTimeout: 10 * time.Second,
+			TaskTimeout:    30 * time.Second,
+		},
 	}, nil
 }
 
@@ -112,11 +151,15 @@ func createWorkerService(config *Config, logger *zerolog.Logger) (*service.Worke
 	}
 
 	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: config.Timeouts.RequestTimeout,
 	}
 
-	return service.NewWorkerService(workerPool, logger, httpClient, config.RetryLimit), nil
+	return service.NewWorkerService(workerPool, logger, httpClient, service.APIConfig{
+		RateLimit: config.APIConfig.RateLimit,
+		BaseURL:   config.APIConfig.BaseURL,
+	}, config.GlobalRetryLimit), nil
 }
+
 func createMessaging(config *Config, logger *zerolog.Logger) (*message.Messaging, error) {
 	messaging := message.NewMessaging(config.NSQConfig, logger)
 	return messaging, nil
