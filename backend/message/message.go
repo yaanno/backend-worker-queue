@@ -12,13 +12,6 @@ import (
 	"github.com/yaanno/backend/model"
 )
 
-const (
-	backend_channel = "backend_to_worker"
-	worker_channel  = "worker_to_backend"
-	nsqd_address    = "nsqd:4150"
-	channel         = "channel1"
-)
-
 type Messaging interface {
 	PublishMessage(msg *model.Response) error
 	ConsumeMessage(msg *model.Message) error
