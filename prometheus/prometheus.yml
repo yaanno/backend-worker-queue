@@ -6,3 +6,7 @@ scrape_configs:
   - job_name: 'worker'
     static_configs:
       - targets: ['worker:2112']
+
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['backend:2113']

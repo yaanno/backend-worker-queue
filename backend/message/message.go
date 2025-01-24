@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 
 	"github.com/nsqio/go-nsq"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
+	"github.com/yaanno/backend/config"
 	handler "github.com/yaanno/backend/handler"
+	"github.com/yaanno/backend/metrics"
 	"github.com/yaanno/backend/model"
 )
 
@@ -26,11 +29,11 @@ type Messaging interface {
 type MessagingImpl struct {
 	producer *nsq.Producer
 	consumer *nsq.Consumer
-	config   *nsq.Config
+	config   *config.Config
 	logger   *zerolog.Logger
 }
 
-func NewMessaging(config *nsq.Config, logger *zerolog.Logger) Messaging {
+func NewMessaging(config *config.Config, logger *zerolog.Logger) Messaging {
 	return &MessagingImpl{
 		config: config,
 		logger: logger,
@@ -42,37 +45,50 @@ func (m *MessagingImpl) Initialize(handler *handler.MessageResponseHandler) erro
 	if m.logger == nil {
 		m.logger = &zerolog.Logger{}
 	}
-	m.producer, err = nsq.NewProducer(nsqd_address, m.config)
+
+	// Initialize producer
+	m.producer, err = nsq.NewProducer(m.config.NSQDAddress, m.config.NSQConfig)
 	if err != nil {
+		metrics.NSQConnectionStatus.Set(0)
 		return err
 	}
-	m.consumer, err = nsq.NewConsumer(worker_channel, channel, m.config)
+
+	// Initialize consumer
+	m.consumer, err = nsq.NewConsumer(m.config.Channels.FromWorker, m.config.Channels.Name, m.config.NSQConfig)
 	if err != nil {
+		metrics.NSQConnectionStatus.Set(0)
 		return err
 	}
+
 	m.consumer.AddHandler(handler)
-
-	err = m.consumer.ConnectToNSQD(nsqd_address)
+	err = m.consumer.ConnectToNSQD(m.config.NSQDAddress)
 	if err != nil {
-		m.logger.Error().Err(err).Msg("Failed to connect to nsqd")
+		metrics.NSQConnectionStatus.Set(0)
 		return err
 	}
 
+	metrics.NSQConnectionStatus.Set(1)
 	return nil
 }
 
 func (m *MessagingImpl) PublishMessage(msg *model.Response) error {
-	message, err := json.Marshal(msg)
-	m.logger.Info().Msg("Sending message to worker")
+	timer := prometheus.NewTimer(metrics.MessageProcessingDuration.WithLabelValues("send"))
+	defer timer.ObserveDuration()
+
+	jsonMsg, err := json.Marshal(msg)
 	if err != nil {
-		m.logger.Error().Err(err).Msg("Failed to marshal message")
+		metrics.MessagesSent.WithLabelValues("error").Inc()
 		return err
 	}
-	m.logger.Info().Msg("Publishing message to worker")
-	err = m.producer.Publish(backend_channel, message)
+
+	err = m.producer.Publish(m.config.Channels.ToWorker, jsonMsg)
 	if err != nil {
+		metrics.MessagesSent.WithLabelValues("error").Inc()
 		return err
 	}
+
+	metrics.MessagesSent.WithLabelValues("success").Inc()
+	metrics.MessageQueueDepth.Inc()
 	return nil
 }
 
@@ -82,8 +98,12 @@ func (m *MessagingImpl) ConsumeMessage(msg *model.Message) error {
 }
 
 func (m *MessagingImpl) ShutDown() error {
-	m.logger.Info().Msg("Shutting down gracefully...")
-	m.producer.Stop()
-	m.consumer.Stop()
+	if m.consumer != nil {
+		m.consumer.Stop()
+	}
+	if m.producer != nil {
+		m.producer.Stop()
+	}
+	metrics.NSQConnectionStatus.Set(0)
 	return nil
 }

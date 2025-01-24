@@ -1,42 +1,56 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nsqio/go-nsq"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/yaanno/backend/config"
 	"github.com/yaanno/backend/handler"
 	logger "github.com/yaanno/backend/logger"
 	"github.com/yaanno/backend/message"
 	"github.com/yaanno/backend/model"
 )
 
-type WorkerMessage struct {
-	Body string `json:"body"`
-	ID   int    `json:"id"`
-}
-
 func main() {
-	// Signal handling for graceful stopping
+	// Initialize logger and config
 	logger := logger.InitLogger("backend", "development")
+	config := config.NewConfig()
+
+	// Signal handling for graceful stopping
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	logger.Info().Msg("Starting Backend...")
 
-	config := nsq.NewConfig()
-
+	// Create handler and messaging
 	handler := handler.NewMessageResponseHandler(&logger)
-
 	messaging := message.NewMessaging(config, &logger)
 
-	messaging.Initialize(handler)
+	if err := messaging.Initialize(handler); err != nil {
+		logger.Fatal().Err(err).Msg("Failed to initialize messaging")
+	}
 
+	// Start metrics server
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		metricsServer := &http.Server{
+			Addr:    fmt.Sprintf(":%s", config.MetricsPort),
+			Handler: promhttp.Handler(),
+		}
+		logger.Info().Msgf("Starting metrics server on :%s", config.MetricsPort)
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error().Err(err).Msg("Metrics server error")
+		}
+	}()
+
+	// Start message publishing loop
+	go func() {
+		ticker := time.NewTicker(config.MessageInterval)
 		defer ticker.Stop()
 
 		for {
