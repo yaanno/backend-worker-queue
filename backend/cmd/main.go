@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/yaanno/backend/handler"
 	logger "github.com/yaanno/backend/logger"
 	"github.com/yaanno/backend/message"
+	"github.com/yaanno/backend/metrics"
 	"github.com/yaanno/backend/model"
 )
 
@@ -22,17 +24,24 @@ func main() {
 	logger := logger.InitLogger("backend", "development")
 	config := config.NewConfig()
 
+	// Initialize metrics
+	metrics.InitMetrics()
+
 	// Signal handling for graceful stopping
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	logger.Info().Msg("Starting Backend...")
 
+	// Create a context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create handler and messaging
 	handler := handler.NewMessageResponseHandler(&logger)
 	messaging := message.NewMessaging(config, &logger)
 
-	if err := messaging.Initialize(handler); err != nil {
+	if err := messaging.Initialize(ctx, handler); err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize messaging")
 	}
 
@@ -58,7 +67,7 @@ func main() {
 			case <-ticker.C:
 				id := uuid.New()
 				msg := model.Response{Body: "Hello from backend", ID: int(id.ID())}
-				err := messaging.PublishMessage(&msg)
+				err := messaging.PublishMessage(ctx, &msg)
 				if err != nil {
 					logger.Error().Err(err).Msg("Failed to publish message")
 				} else {
@@ -74,5 +83,5 @@ func main() {
 	// Wait for stop signal
 	<-stop
 	logger.Info().Msg("Shutting down gracefully...")
-	messaging.ShutDown()
+	messaging.ShutDown(ctx)
 }

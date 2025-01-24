@@ -25,4 +25,5 @@ require (
 	github.com/golang/snappy v0.0.1 // indirect
 	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.33.0
+	github.com/sony/gobreaker v1.0.0
 )
