@@ -2,22 +2,36 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"net/http"
-
 	"github.com/nsqio/go-nsq"
+	"github.com/panjf2000/ants/v2"
+	"github.com/rs/zerolog"
 	handler "github.com/yaanno/worker/handler"
 	logger "github.com/yaanno/worker/logger"
 	"github.com/yaanno/worker/message"
-	"github.com/yaanno/worker/pool"
 	"github.com/yaanno/worker/service"
 )
 
+type Config struct {
+	NSQConfig      *nsq.Config
+	WorkerPoolSize int
+	RetryLimit     int
+}
+
 func main() {
+	// Load configuration (replace with your actual configuration loading logic)
+	config, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Initialize logger
 	logger := logger.InitLogger("worker", "development")
 
@@ -31,71 +45,79 @@ func main() {
 
 	logger.Info().Msg("Starting Worker...")
 
-	// Initialize NSQ config
-	config := nsq.NewConfig()
-
-	// Retry limit
-	retryLimit := 5
-
-	// Initialize messaging
-	messaging := message.NewMessaging(config, &logger)
-
-	// Initialize the worker pool
-	workerPool := pool.NewWorkerPool(1, 5)
-
-	// Initialize the HTTP client
-	httpClient := &http.Client{}
-
-	// Initialize the worker service with the messaging instance and worker pool
-	workerService := service.NewWorkerService(workerPool, messaging, &logger, httpClient, retryLimit)
-	workerService.Start() // Start the worker pool
-
-	// Initialize the backend response handler with the worker service instance
-	responseHandler := handler.NewMessageResponseHandler(&logger, workerService)
-
-	err := messaging.Initialize(responseHandler)
+	messaging, err := createMessaging(config, &logger)
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to initialize messaging")
-		return
+		logger.Fatal().Err(err).Msg("Failed to create messaging client")
+	}
+	defer messaging.ShutDown()
+
+	workerService, err := createWorkerService(config, &logger)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to create worker service")
+	}
+	defer workerService.Stop()
+
+	responseHandler := handler.NewMessageResponseHandler(ctx, &logger, workerService, messaging)
+
+	err = messaging.Initialize(responseHandler)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to initialize messaging")
 	}
 
 	// Start listening for messages in a goroutine
-	go messaging.ListenForMessages(ctx)
+	// go func() {
+	// 	defer cancel() // Propagate cancellation to listening goroutine
+	// 	err := messaging.ListenForMessages(ctx)
+	// 	if err != nil {
+	// 		logger.Error().Err(err).Msg("Error listening for messages")
+	// 	}
+	// }()
 
 	// Monitoring
 	go func() {
 		for {
+			time.Sleep(1 * time.Second)
+			stats := messaging.GetStats()
+			logger.Info().Interface("stats", stats).Send()
+			// for _, consumer := range stats {
+			// 	logger.Info().Interface("stats", consumer.Stats()).Send()
+			// }
+		}
+	}()
+
+	go func() {
+		for {
 			time.Sleep(5 * time.Second)
-			consumers := messaging.Monitor()
-			logger.Info().Msg("Consumer Status:")
-			for _, consumer := range consumers {
-				logger.Info().Msgf(
-					"Received: %d, Processed: %d, Requeued: %d",
-					consumer.Stats().MessagesReceived,
-					consumer.Stats().MessagesFinished,
-					consumer.Stats().MessagesRequeued,
-				)
-			}
-			tasks := workerService.GetTaskCount()
-			poolSize := workerService.GetPoolSize()
-			logger.Info().Msgf("Task Count: %d, Pool Size: %d", tasks, poolSize)
-			workers := workerService.Monitor()
-			logger.Info().Msg("Worker Status:")
-			for _, worker := range workers {
-				logger.Info().Msgf(
-					"Worker ID: %d, State: %s, Elapsed Time: %s",
-					worker.ID,
-					worker.State,
-					worker.ElapsedTime,
-				)
-			}
+			workerService.Monitor()
 		}
 	}()
 
 	// Wait for stop signal
 	<-stop
+}
 
-	// Shut down messaging and worker service
-	messaging.ShutDown()
-	workerService.Stop()
+func loadConfig() (*Config, error) {
+	// Implement your configuration loading logic here (e.g., read from file, environment variables)
+	return &Config{
+		NSQConfig:      nsq.NewConfig(), // Replace with actual configuration
+		WorkerPoolSize: 10,              // Adjust as needed
+		RetryLimit:     5,
+	}, nil
+}
+
+func createWorkerService(config *Config, logger *zerolog.Logger) (*service.WorkerService, error) {
+	workerPool, err := ants.NewPool(config.WorkerPoolSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create worker pool: %w", err)
+	}
+
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	return service.NewWorkerService(workerPool, logger, httpClient, config.RetryLimit), nil
+}
+func createMessaging(config *Config, logger *zerolog.Logger) (*message.Messaging, error) {
+	messaging := message.NewMessaging(config.NSQConfig, logger)
+	return messaging, nil
 }

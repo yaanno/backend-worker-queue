@@ -7,15 +7,14 @@ import (
 	"time"
 
 	"github.com/nsqio/go-nsq"
+	"github.com/panjf2000/ants/v2"
 	"github.com/rs/zerolog"
 	"github.com/yaanno/worker/message"
 	"github.com/yaanno/worker/model"
-	"github.com/yaanno/worker/pool"
 )
 
 type WorkerService struct {
-	workerPool *pool.WorkerPool
-	messaging  *message.Messaging
+	pool       *ants.Pool
 	logger     *zerolog.Logger
 	httpClient *http.Client
 	apiUrl     string
@@ -23,78 +22,102 @@ type WorkerService struct {
 }
 
 func NewWorkerService(
-	workerPool *pool.WorkerPool,
-	messaging *message.Messaging,
+	pool *ants.Pool,
 	logger *zerolog.Logger,
 	httpClient *http.Client,
 	retryLimit int,
 ) *WorkerService {
-	return &WorkerService{
-		workerPool: workerPool,
-		messaging:  messaging,
+	ws := &WorkerService{
+		pool:       pool,
 		logger:     logger,
 		httpClient: httpClient,
+		apiUrl:     "https://origo.hu", // Replace with your default API URL
 		retryLimit: retryLimit,
 	}
+	return ws
 }
 
 func (ws *WorkerService) Start() {
-	ws.workerPool.Start()
+	// No explicit start needed for ants pool, it starts automatically
 }
 
 func (ws *WorkerService) Stop() {
-	ws.workerPool.Shutdown()
+	// Gracefully shutdown the ants pool
+	ws.pool.Release()
 }
 
-func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Message) error {
-	ws.apiUrl = "https://origo.hu"
-	// ws.apiUrl = "https://potterapi-fedeperin.vercel.app/es/characters?search=Weasley1"
+func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Message, messaging *message.Messaging) error {
 	ws.logger.Info().Msg("Processing message")
-	// Submit the task to the worker pool
-	ws.workerPool.Submit(func(ctx context.Context) error {
+
+	if ws.pool == nil {
+		ws.logger.Error().Msg("Worker pool is not initialized")
+		return nil
+	}
+
+	// Submit the task to the ants pool
+	err := ws.pool.Submit(func() {
 		ws.logger.Info().Msgf("Worker started processing message ID: %s", message.ID)
 
-		select {
-		case <-ctx.Done():
-			ws.logger.Error().Msg("Task canceled due to timeout")
-			ws.requeueMessage(message)
-			return ctx.Err()
-		default:
-		}
+		retries := 0
 
-		var msg model.Message
-		err := json.Unmarshal(message.Body, &msg)
-		if err != nil {
-			ws.logger.Error().Err(err).Msg("Failed to unmarshal message")
-			ws.requeueMessage(message)
-			return err
-		}
+		for {
+			// Create a context with timeout
+			timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second) // Adjust timeout as needed
+			defer cancel()
 
-		startTime := time.Now()
-		_, err = ws.sendRequest(ctx)
-		elapsedTime := time.Since(startTime)
-		ws.logger.Info().Msgf("Task completed in %s", elapsedTime)
-		if err != nil {
-			ws.logger.Error().Err(err).Msg("Error sending request")
-			ws.requeueMessage(message)
-			return err
-		}
+			select {
+			case <-timeoutCtx.Done():
+				ws.logger.Error().Msg("Task canceled due to timeout")
+				ws.requeueMessage(message)
+				return
+			default:
+			}
 
-		// Create a response message
-		responseMsg := &model.Response{
-			ID:   msg.ID,
-			Body: msg.Body,
+			var msg model.Message
+			err := json.Unmarshal(message.Body, &msg)
+			if err != nil {
+				ws.logger.Error().Err(err).Msg("Failed to unmarshal message")
+				ws.requeueMessage(message)
+				continue // Continue the retry loop
+			}
+
+			startTime := time.Now()
+			response, err := ws.sendRequest(timeoutCtx) // Use timeoutCtx for the request
+			elapsedTime := time.Since(startTime)
+			ws.logger.Info().Msgf("Task completed in %s", elapsedTime)
+			if err != nil || response.StatusCode != http.StatusOK {
+				retries++
+				if retries >= ws.retryLimit {
+					ws.logger.Error().Err(err).Msgf("Error sending request (attempt %d)", retries)
+					ws.requeueMessage(message)
+					return // Exit the worker function
+				}
+				ws.logger.Warn().Err(err).Msgf("Retrying request (attempt %d)", retries)
+				time.Sleep(time.Duration(retries) * time.Second) // Exponential backoff
+				continue                                         // Continue the retry loop
+			}
+
+			// Create a response message
+			responseMsg := &model.Response{
+				ID:   msg.ID,
+				Body: msg.Body,
+			}
+			// Publish the response message
+			if err := messaging.PublishMessage(responseMsg); err != nil {
+				ws.logger.Error().Err(err).Msg("Error publishing message")
+				ws.requeueMessage(message)
+				continue // Continue the retry loop
+			}
+			message.Finish()
+			ws.logger.Info().Msgf("Worker finished processing message ID: %s", message.ID)
+			return // Exit the worker function successfully
 		}
-		// Publish the response message
-		if err := ws.messaging.PublishMessage(responseMsg); err != nil {
-			ws.logger.Error().Err(err).Msg("Error publishing message")
-			ws.requeueMessage(message)
-			return err
-		}
-		message.Finish()
-		ws.logger.Info().Msgf("Worker finished processing message ID: %s", message.ID)
-		return nil
 	})
+
+	if err != nil {
+		ws.logger.Error().Err(err).Msg("Error submitting task to pool")
+		return err
+	}
 
 	return nil
 }
@@ -124,32 +147,14 @@ func (ws *WorkerService) requeueMessage(message *nsq.Message) {
 	} else {
 		backoffDuration := time.Duration(message.Attempts) * time.Second
 		ws.logger.Warn().Msgf("Requeueing message with backoff: %s", backoffDuration)
-		message.RequeueWithoutBackoff(backoffDuration)
+		message.Requeue(backoffDuration)
 	}
 }
 
-// Helpers
-
-func (ws *WorkerService) GetWorkers() []*pool.Worker {
-	return ws.workerPool.GetWorkers()
-}
-
-func (ws *WorkerService) GetWorker(id int) *pool.Worker {
-	return ws.workerPool.GetWorker(id)
-}
-
-func (ws *WorkerService) GetTaskCount() int {
-	return ws.workerPool.GetTaskCount()
-}
-
-func (ws *WorkerService) GetPoolSize() int {
-	return ws.workerPool.GetPoolSize()
-}
-
-func (ws *WorkerService) Monitor() []*pool.Worker {
-	return ws.GetWorkers()
-}
-
-func (ws *WorkerService) PoolSize() int {
-	return ws.workerPool.GetPoolSize()
+func (ws *WorkerService) Monitor() {
+	ws.logger.Info().Msg("Monitoring worker pool")
+	ws.logger.Info().Msgf("Pool size: %d", ws.pool.Cap())
+	ws.logger.Info().Msgf("Running workers: %d", ws.pool.Running())
+	ws.logger.Info().Msgf("Free workers: %d", ws.pool.Free())
+	ws.logger.Info().Msgf("Waiting tasks: %d", ws.pool.Waiting())
 }

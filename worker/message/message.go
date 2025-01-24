@@ -1,10 +1,8 @@
 package message
 
 import (
-	"context"
 	"encoding/json"
 	"sync"
-	"time"
 
 	"github.com/nsqio/go-nsq"
 	"github.com/rs/zerolog"
@@ -40,15 +38,30 @@ func (m *Messaging) Initialize(handler nsq.Handler) error {
 	}
 	m.producer, err = nsq.NewProducer(nsqd_address, m.config)
 	if err != nil {
-		return err
+		m.logger.Error().Err(err).Msg("Failed to connect to nsqd")
 	}
-	m.consumer, err = nsq.NewConsumer(backend_channel, channel, m.config)
+
+	// Create and start the consumer in a separate function
+	err = m.startConsumer(handler, nsqd_address)
 	if err != nil {
+		m.logger.Error().Err(err).Msg("Failed to start consumer")
 		return err
 	}
+
+	return nil
+}
+
+func (m *Messaging) startConsumer(handler nsq.Handler, nsqdAddress string) error {
+	m.logger.Warn().Msg("Starting new consumer...")
+	consumer, err := nsq.NewConsumer(backend_channel, channel, m.config)
+	if err != nil {
+		m.logger.Error().Err(err).Msg("Failed to create consumer")
+		return err
+	}
+	m.consumer = consumer
 	m.consumer.AddHandler(handler)
 
-	err = m.consumer.ConnectToNSQD(nsqd_address)
+	err = m.consumer.ConnectToNSQD(nsqdAddress)
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to connect to nsqd")
 		return err
@@ -67,49 +80,37 @@ func (m *Messaging) PublishMessage(msg *model.Response) error {
 	m.logger.Info().Msg("Publishing message to backend")
 	err = m.producer.Publish(worker_channel, message)
 	if err != nil {
+		m.logger.Error().Err(err).Msg("Failed to publish message")
 		return err
 	}
-	return nil
-}
-
-func (m *Messaging) ConsumeMessage(msg *model.Message) error {
-	m.logger.Info().Msg("Consuming message from backend")
 	return nil
 }
 
 func (m *Messaging) ShutDown() error {
 	m.logger.Info().Msg("Shutting down gracefully...")
 	m.producer.Stop()
-	m.consumer.Stop()
+	if m.consumer != nil {
+		m.consumer.Stop()
+	}
 	m.wg.Wait()
 	return nil
 }
 
-func (m *Messaging) ListenForMessages(ctx context.Context) error {
-	m.logger.Info().Msg("Listening for messages...")
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		m.logger.Debug().Interface("stats", m.consumer.Stats()).Send()
-		<-ctx.Done()
-		m.consumer.Stop()
-		m.logger.Info().Msg("Stopped listening for messages.")
-	}()
-	return nil
-}
+// func (m *Messaging) RequeueMessage(message *nsq.Message) {
+// 	m.logger.Info().Msg("Requeue message")
+// 	if message.Attempts >= 5 {
+// 		m.logger.Error().Msg("Max attempts reached, dropping message")
+// 		message.Finish()
+// 	} else {
+// 		backoffDuration := time.Duration(message.Attempts) * time.Second
+// 		message.Requeue(backoffDuration)
+// 		m.logger.Info().Msg("Message requeued")
+// 	}
+// }
 
-func (m *Messaging) RequeueMessage(message *nsq.Message) {
-	m.logger.Info().Msg("Requeue message")
-	if message.Attempts >= 5 {
-		m.logger.Error().Msg("Max attempts reached, dropping message")
-		message.Finish()
-	} else {
-		backoffDuration := time.Duration(message.Attempts) * time.Second
-		message.Requeue(backoffDuration)
-		m.logger.Info().Msg("Message requeued")
+func (m *Messaging) GetStats() *nsq.ConsumerStats {
+	if m.consumer == nil {
+		return nil
 	}
-}
-
-func (m *Messaging) Monitor() []*nsq.Consumer {
-	return []*nsq.Consumer{m.consumer}
+	return m.consumer.Stats()
 }
