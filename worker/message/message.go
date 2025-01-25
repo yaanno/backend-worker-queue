@@ -6,25 +6,26 @@ import (
 
 	"github.com/nsqio/go-nsq"
 	"github.com/rs/zerolog"
+	"github.com/yaanno/worker/config"
 	"github.com/yaanno/worker/model"
 )
 
-const (
-	backend_channel = "backend_to_worker"
-	worker_channel  = "worker_to_backend"
-	nsqd_address    = "nsqd:4150"
-	channel         = "channel1"
-)
+// const (
+// 	backend_channel = "backend_to_worker"
+// 	worker_channel  = "worker_to_backend"
+// 	nsqd_address    = "nsqd:4150"
+// 	channel         = "channel1"
+// )
 
 type Messaging struct {
 	producer *nsq.Producer
 	consumer *nsq.Consumer
-	config   *nsq.Config
+	config   *config.Config
 	logger   *zerolog.Logger
 	wg       sync.WaitGroup
 }
 
-func NewMessaging(config *nsq.Config, logger *zerolog.Logger) *Messaging {
+func NewMessaging(config *config.Config, logger *zerolog.Logger) *Messaging {
 	return &Messaging{
 		config: config,
 		logger: logger,
@@ -36,13 +37,13 @@ func (m *Messaging) Initialize(handler nsq.Handler) error {
 	if m.logger == nil {
 		m.logger = &zerolog.Logger{}
 	}
-	m.producer, err = nsq.NewProducer(nsqd_address, m.config)
+	m.producer, err = nsq.NewProducer(m.config.NSQ.Address, nsq.NewConfig())
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to connect to nsqd")
 	}
 
 	// Create and start the consumer in a separate function
-	err = m.startConsumer(handler, nsqd_address)
+	err = m.startConsumer(handler, m.config.NSQ.Address)
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to start consumer")
 		return err
@@ -53,7 +54,7 @@ func (m *Messaging) Initialize(handler nsq.Handler) error {
 
 func (m *Messaging) startConsumer(handler nsq.Handler, nsqdAddress string) error {
 	m.logger.Warn().Msg("Starting new consumer...")
-	consumer, err := nsq.NewConsumer(backend_channel, channel, m.config)
+	consumer, err := nsq.NewConsumer(m.config.NSQ.Channels.ToWorker, m.config.NSQ.Channels.Name, nsq.NewConfig())
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to create consumer")
 		return err
@@ -78,7 +79,7 @@ func (m *Messaging) PublishMessage(msg *model.Response) error {
 		return err
 	}
 	m.logger.Info().Msg("Publishing message to backend")
-	err = m.producer.Publish(worker_channel, message)
+	err = m.producer.Publish(m.config.NSQ.Channels.FromWorker, message)
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to publish message")
 		return err

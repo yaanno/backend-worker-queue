@@ -48,10 +48,10 @@ func main() {
 	// Start metrics server
 	go func() {
 		metricsServer := &http.Server{
-			Addr:    fmt.Sprintf(":%s", config.MetricsPort),
+			Addr:    fmt.Sprintf(":%d", config.Metrics.Port),
 			Handler: promhttp.Handler(),
 		}
-		logger.Info().Msgf("Starting metrics server on :%s", config.MetricsPort)
+		logger.Info().Msgf("Starting metrics server on :%d", config.Metrics.Port)
 		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error().Err(err).Msg("Metrics server error")
 		}
@@ -59,7 +59,7 @@ func main() {
 
 	// Start message publishing loop
 	go func() {
-		ticker := time.NewTicker(config.MessageInterval)
+		ticker := time.NewTicker(config.Messaging.MessageInterval)
 		defer ticker.Stop()
 
 		for {

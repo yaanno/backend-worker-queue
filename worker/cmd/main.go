@@ -9,36 +9,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nsqio/go-nsq"
 	"github.com/panjf2000/ants/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
-	handler "github.com/yaanno/worker/handler"
-	logger "github.com/yaanno/worker/logger"
+	"github.com/yaanno/worker/config"
+	"github.com/yaanno/worker/handler"
+	"github.com/yaanno/worker/logger"
 	"github.com/yaanno/worker/message"
+	"github.com/yaanno/worker/metrics"
 	"github.com/yaanno/worker/service"
 )
-
-type Config struct {
-	NSQConfig        *nsq.Config
-	WorkerPoolSize   int
-	GlobalRetryLimit int
-	APIConfig        APIConfig
-	Timeouts         TimeoutConfig
-}
-
-type APIConfig struct {
-	BaseURL       string
-	APIKey        string
-	RateLimit     int // Requests per second
-	MaxRetries    int
-	APIRetryLimit int
-}
-
-type TimeoutConfig struct {
-	RequestTimeout time.Duration
-	TaskTimeout    time.Duration
-}
 
 func main() {
 	// Load configuration (replace with your actual configuration loading logic)
@@ -50,6 +30,9 @@ func main() {
 
 	// Initialize logger
 	logger := logger.InitLogger("worker", "development")
+
+	// Initialize metrics
+	metrics.InitMetrics()
 
 	// Set up a channel to listen for interrupt signals
 	stop := make(chan os.Signal, 1)
@@ -92,24 +75,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to initialize messaging")
 	}
 
-	// Start listening for messages in a goroutine
-	// go func() {
-	// 	defer cancel() // Propagate cancellation to listening goroutine
-	// 	err := messaging.ListenForMessages(ctx)
-	// 	if err != nil {
-	// 		logger.Error().Err(err).Msg("Error listening for messages")
-	// 	}
-	// }()
-
 	// Monitoring
 	go func() {
 		for {
 			time.Sleep(1 * time.Second)
 			stats := messaging.GetStats()
 			logger.Info().Interface("stats", stats).Send()
-			// for _, consumer := range stats {
-			// 	logger.Info().Interface("stats", consumer.Stats()).Send()
-			// }
 		}
 	}()
 
@@ -124,43 +95,29 @@ func main() {
 	<-stop
 }
 
-func loadConfig() (*Config, error) {
-	// Implement your configuration loading logic here (e.g., read from file, environment variables)
-	return &Config{
-		NSQConfig:        nsq.NewConfig(), // Replace with actual configuration
-		WorkerPoolSize:   10,              // Adjust as needed
-		GlobalRetryLimit: 5,
-		APIConfig: APIConfig{
-			BaseURL: "https://potterapi-fedeperin.vercel.app/es/characters?search=Weasley",
-			// APIKey:        "your-api-key",
-			RateLimit:     10,
-			MaxRetries:    3,
-			APIRetryLimit: 5,
-		},
-		Timeouts: TimeoutConfig{
-			RequestTimeout: 10 * time.Second,
-			TaskTimeout:    30 * time.Second,
-		},
-	}, nil
+func loadConfig() (*config.Config, error) {
+	cfg := config.NewConfig()
+	// Add any additional configuration loading logic here if needed
+	return cfg, nil
 }
 
-func createWorkerService(config *Config, logger *zerolog.Logger) (*service.WorkerService, error) {
-	workerPool, err := ants.NewPool(config.WorkerPoolSize)
+func createWorkerService(config *config.Config, logger *zerolog.Logger) (*service.WorkerService, error) {
+	workerPool, err := ants.NewPool(config.Api.WorkerPoolSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create worker pool: %w", err)
 	}
 
 	httpClient := &http.Client{
-		Timeout: config.Timeouts.RequestTimeout,
+		Timeout: config.Api.RequestTimeout,
 	}
 
 	return service.NewWorkerService(workerPool, logger, httpClient, service.APIConfig{
-		RateLimit: config.APIConfig.RateLimit,
-		BaseURL:   config.APIConfig.BaseURL,
-	}, config.GlobalRetryLimit), nil
+		RateLimit: config.Api.RateLimit,
+		BaseURL:   config.Api.BaseURL,
+	}, config.Api.RetryLimit), nil
 }
 
-func createMessaging(config *Config, logger *zerolog.Logger) (*message.Messaging, error) {
-	messaging := message.NewMessaging(config.NSQConfig, logger)
+func createMessaging(config *config.Config, logger *zerolog.Logger) (*message.Messaging, error) {
+	messaging := message.NewMessaging(config, logger)
 	return messaging, nil
 }

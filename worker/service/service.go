@@ -88,7 +88,7 @@ func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Messag
 	defer timer.ObserveDuration()
 
 	// Update worker pool utilization
-	metrics.WorkerPoolUtilization.Set(float64(ws.pool.Running()))
+	metrics.WorkerUtilization.WithLabelValues("worker").Set(float64(ws.pool.Running()))
 
 	ws.logger.Info().Msg("Processing message")
 
@@ -150,6 +150,18 @@ func (ws *WorkerService) ProcessMessage(ctx context.Context, message *nsq.Messag
 			if httpResp.StatusCode >= 500 {
 				ws.logger.Error().Int("status", httpResp.StatusCode).Msg("Server error")
 				ws.requeueMessage(message)
+				return
+			}
+
+			// Create response message
+			response := &model.Response{
+				ID:   msg.ID,
+				Body: fmt.Sprintf("Processed message %d with status %d", msg.ID, httpResp.StatusCode),
+			}
+
+			// Send response back to backend
+			if err := messaging.PublishMessage(response); err != nil {
+				ws.logger.Error().Err(err).Msg("Failed to publish response to backend")
 				return
 			}
 

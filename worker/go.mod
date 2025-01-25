@@ -8,6 +8,7 @@ require (
 	github.com/prometheus/client_golang v1.20.5
 	github.com/rs/zerolog v1.33.0
 	github.com/sony/gobreaker v0.5.0
+	github.com/yaanno/shared v0.0.1
 	golang.org/x/time v0.5.0
 )
 
@@ -26,3 +27,5 @@ require (
 	golang.org/x/sys v0.22.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )
+
+replace github.com/yaanno/shared => ../shared

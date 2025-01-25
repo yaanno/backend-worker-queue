@@ -22,19 +22,19 @@ func (m *MessagingImpl) validateConfig() error {
 	if m.config == nil {
 		return fmt.Errorf("%w: config is nil", ErrInvalidConfig)
 	}
-	if m.config.NSQDAddress == "" {
+	if m.config.NSQ.Address == "" {
 		return fmt.Errorf("%w: NSQDAddress is empty", ErrInvalidConfig)
 	}
-	if m.config.NSQConfig == nil {
-		return fmt.Errorf("%w: NSQConfig is nil", ErrInvalidConfig)
-	}
-	if m.config.Channels.Name == "" {
+	// if m.config.NSQ == nil {
+	// 	return fmt.Errorf("%w: NSQConfig is nil", ErrInvalidConfig)
+	// }
+	if m.config.NSQ.Channels.Name == "" {
 		return fmt.Errorf("%w: channel name is empty", ErrInvalidConfig)
 	}
-	if m.config.Channels.ToWorker == "" {
+	if m.config.NSQ.Channels.ToWorker == "" {
 		return fmt.Errorf("%w: ToWorker channel is empty", ErrInvalidConfig)
 	}
-	if m.config.Channels.FromWorker == "" {
+	if m.config.NSQ.Channels.FromWorker == "" {
 		return fmt.Errorf("%w: FromWorker channel is empty", ErrInvalidConfig)
 	}
 	return nil

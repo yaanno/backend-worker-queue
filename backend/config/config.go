@@ -1,43 +1,27 @@
 package config
 
 import (
-	"time"
-
-	"github.com/nsqio/go-nsq"
+	"github.com/yaanno/shared/config"
 )
 
-type Config struct {
-	NSQConfig       *nsq.Config
-	NSQDAddress     string
-	MessageInterval time.Duration
-	Channels        struct {
-		ToWorker   string
-		FromWorker string
-		Name       string
-	}
-	MetricsPort     string
-	RequestTimeout  time.Duration
-	RetryLimit      int
-}
+// Config is now a type alias to the shared configuration
+type Config = config.ServiceConfig
 
+// NewConfig creates a new configuration using the shared package defaults
 func NewConfig() *Config {
-	channels := struct {
-		ToWorker   string
-		FromWorker string
-		Name       string
-	}{
-		ToWorker:   "backend_to_worker",
-		FromWorker: "worker_to_backend",
-		Name:       "channel1",
+	cfg := config.DefaultServiceConfig("backend")
+
+	// Optional: Add backend-specific configuration overrides
+	cfg.NSQ.Channels.FromWorker = "worker-to-backend"
+	cfg.NSQ.Channels.ToWorker = "backend-to-worker"
+	cfg.NSQ.Channels.Name = "common"
+
+	// Validate the configuration
+	if err := cfg.Validate(); err != nil {
+		panic(err)
 	}
 
-	return &Config{
-		NSQConfig:       nsq.NewConfig(),
-		NSQDAddress:     "nsqd:4150",
-		MessageInterval: 10 * time.Second,
-		Channels:        channels,
-		MetricsPort:     "2113", // Different from worker's 2112
-		RequestTimeout:  30 * time.Second,
-		RetryLimit:      3,
-	}
+	return cfg
 }
+
+// Additional backend-specific helper functions can be added here if needed

@@ -68,9 +68,9 @@ func (m *MessagingImpl) Initialize(ctx context.Context, handler *handler.Message
 		// Initialize producer with circuit breaker and retry
 		err := retry.DoWithRetry(ctx, "initialize_producer", m.logger, m.retryConfig, func() error {
 			return m.producerBreaker.Execute(func() error {
-				producer, err := nsq.NewProducer(m.config.NSQDAddress, m.config.NSQConfig)
+				producer, err := nsq.NewProducer(m.config.NSQ.Address, nsq.NewConfig())
 				if err != nil {
-					metrics.NSQConnectionStatus.Set(0)
+					metrics.NSQConnectionStatus.WithLabelValues("producer").Set(0)
 					return fmt.Errorf("create producer: %w", err)
 				}
 				m.producer = producer
@@ -84,9 +84,9 @@ func (m *MessagingImpl) Initialize(ctx context.Context, handler *handler.Message
 		// Initialize consumer with circuit breaker and retry
 		err = retry.DoWithRetry(ctx, "initialize_consumer", m.logger, m.retryConfig, func() error {
 			return m.consumerBreaker.Execute(func() error {
-				consumer, err := nsq.NewConsumer(m.config.Channels.FromWorker, m.config.Channels.Name, m.config.NSQConfig)
+				consumer, err := nsq.NewConsumer(m.config.NSQ.Channels.FromWorker, m.config.NSQ.Channels.Name, nsq.NewConfig())
 				if err != nil {
-					metrics.NSQConnectionStatus.Set(0)
+					metrics.NSQConnectionStatus.WithLabelValues("consumer").Set(0)
 					return fmt.Errorf("create consumer: %w", err)
 				}
 				m.consumer = consumer
@@ -100,9 +100,9 @@ func (m *MessagingImpl) Initialize(ctx context.Context, handler *handler.Message
 					})
 				}))
 
-				err = m.consumer.ConnectToNSQD(m.config.NSQDAddress)
+				err = m.consumer.ConnectToNSQD(m.config.NSQ.Address)
 				if err != nil {
-					metrics.NSQConnectionStatus.Set(0)
+					metrics.NSQConnectionStatus.WithLabelValues("connection").Set(0)
 					return fmt.Errorf("connect to NSQD: %w", err)
 				}
 				return nil
@@ -112,10 +112,10 @@ func (m *MessagingImpl) Initialize(ctx context.Context, handler *handler.Message
 			return fmt.Errorf("failed to initialize consumer: %w", err)
 		}
 
-		metrics.NSQConnectionStatus.Set(1)
+		metrics.NSQConnectionStatus.WithLabelValues("producer").Set(1)
 		m.logger.Info().
-			Str("nsqd_address", m.config.NSQDAddress).
-			Str("channel", m.config.Channels.Name).
+			Str("nsqd_address", m.config.NSQ.Address).
+			Str("channel", m.config.NSQ.Channels.Name).
 			Msg("Successfully initialized NSQ messaging")
 		return nil
 	}
@@ -147,12 +147,12 @@ func (m *MessagingImpl) PublishMessage(ctx context.Context, msg *model.Response)
 		}
 
 		msgSize := float64(len(jsonMsg))
-		metrics.MessageSize.Observe(msgSize)
+		// metrics.MessageSize.WithLabelValues("publish").Observe(msgSize)
 
 		// Use circuit breaker and retry for publish operation
 		err = retry.DoWithRetry(ctx, "publish_message", m.logger, m.retryConfig, func() error {
 			return m.producerBreaker.Execute(func() error {
-				return m.producer.Publish(m.config.Channels.ToWorker, jsonMsg)
+				return m.producer.Publish(m.config.NSQ.Channels.ToWorker, jsonMsg)
 			})
 		})
 
@@ -162,7 +162,6 @@ func (m *MessagingImpl) PublishMessage(ctx context.Context, msg *model.Response)
 		}
 
 		metrics.MessagesSent.WithLabelValues("success").Inc()
-		metrics.MessageQueueDepth.Inc()
 
 		m.logger.Debug().
 			Int("msg_id", msg.ID).
@@ -223,8 +222,9 @@ func (m *MessagingImpl) ShutDown(ctx context.Context) error {
 		if m.producer != nil {
 			m.producer.Stop()
 			m.logger.Info().Msg("NSQ producer stopped")
+			metrics.NSQConnectionStatus.WithLabelValues("producer").Set(0)
 		}
-		metrics.NSQConnectionStatus.Set(0)
+		metrics.NSQConnectionStatus.WithLabelValues("connection").Set(0)
 		return nil
 	}
 }

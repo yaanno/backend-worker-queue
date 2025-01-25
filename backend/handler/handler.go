@@ -39,6 +39,6 @@ func (h *MessageResponseHandler) HandleMessage(m *nsq.Message) error {
 
 	h.logger.Info().Interface("message", msg).Msg("Received message from worker")
 	metrics.MessagesReceived.WithLabelValues("success").Inc()
-	metrics.MessageQueueDepth.Dec()
+	metrics.MessageQueueDepth.WithLabelValues("worker").Dec()
 	return nil
 }

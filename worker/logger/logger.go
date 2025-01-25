@@ -1,24 +1,28 @@
 package logger
 
 import (
-	"os"
-	"runtime/debug"
-
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+	sharedLogger "github.com/yaanno/shared/logger"
 )
 
-func InitLogger(service string, environment string) zerolog.Logger {
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	logger := log.Output(zerolog.ConsoleWriter{Out: os.Stdout}).With().
-		Str("service", service).
-		Str("version", debug.BuildInfo{}.Main.Version).
-		Logger()
-
-	// Set global log level based on environment
-	zerolog.SetGlobalLevel(zerolog.InfoLevel) // Default to Info
-	if environment == "development" {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+// InitLogger creates a new logger using the shared package
+func InitLogger(serviceName, environment string) zerolog.Logger {
+	// Create logger config using shared package defaults
+	loggerConfig := sharedLogger.DefaultLoggerConfig(serviceName)
+	
+	// Customize logger configuration
+	loggerConfig.Environment = environment
+	loggerConfig.LogLevel = zerolog.InfoLevel
+	
+	// Optional: Enable file logging for production
+	if environment == "production" {
+		loggerConfig.WriteToFile = true
+		loggerConfig.FilePath = "/var/log/worker/app.log"
 	}
-	return logger
+	
+	// Setup global logger configuration
+	sharedLogger.SetupGlobalLogger(loggerConfig)
+	
+	// Create and return the configured logger
+	return sharedLogger.NewLogger(loggerConfig)
 }

@@ -1,15 +1,20 @@
 module github.com/yaanno/backend
 
-go 1.22.4
+go 1.21
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/nsqio/go-nsq v1.1.0
 	github.com/prometheus/client_golang v1.20.5
+	github.com/rs/zerolog v1.31.0
+	github.com/sony/gobreaker v1.0.0
+	github.com/yaanno/shared v0.0.1
 )
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/golang/snappy v0.0.1 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
@@ -21,9 +26,4 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 )
 
-require (
-	github.com/golang/snappy v0.0.1 // indirect
-	github.com/google/uuid v1.6.0
-	github.com/rs/zerolog v1.33.0
-	github.com/sony/gobreaker v1.0.0
-)
+replace github.com/yaanno/shared => ../shared
